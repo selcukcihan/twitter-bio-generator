@@ -1,14 +1,12 @@
-import { withPageAuthRequired, getSession } from '@auth0/nextjs-auth0'
-import { ReactElement, useEffect, useState } from 'react'
+import { withPageAuthRequired, getSession, getAccessToken } from '@auth0/nextjs-auth0'
+import { ReactElement } from 'react'
 import Head from '../components/head'
 import React from 'react'
 import Footer from '../components/footer'
 import { TwitterShareButton } from 'react-twitter-embed'
 
 type Props = {
-  lastModified?: number
   bio?: string
-  isLoaded?: boolean
 }
 
 const getOuterComponent = (isLoaded: boolean, inner: ReactElement) => (
@@ -32,54 +30,55 @@ const getOuterComponent = (isLoaded: boolean, inner: ReactElement) => (
 )
 
 export default function Home(props: Props) {
-  const [bio, setBio] = useState(props.bio || '')
-  const [isLoaded, setIsLoaded] = useState(true)
-  useEffect(() => {
-    if (!props.lastModified || +new Date() - props.lastModified > 24 * 3600 * 1000) {
-      const fetchApi = async () => {
-        const response = await fetch('/api/bio')
-        const _bio = await response.json()
-        setBio(_bio.generated)
-        setIsLoaded(true)
-      }
-      setIsLoaded(false)
-      fetchApi()
-    }
-  }, [props.lastModified])
   return getOuterComponent(
-    isLoaded,
+    true,
     <React.Fragment>
       <div className='justify-center items-center text-2xl '>
         <h1 className='italic text-lg text-stone-500 pt-10'>Your Generated Bio 👇</h1>
         <br/>
-        <h2 className='p-1 shadow-lg rounded-xl border-neutral-200 border-2'>{bio}</h2>
+        <h2 className='p-1 shadow-lg rounded-xl border-neutral-200 border-2'>{props.bio}</h2>
         <br/>
         <div className='grid place-items-center p-1'>
           <TwitterShareButton
             url='https://twitter-bio-generator.selcukcihan.com'
-            options={{text: bio + "\n#BIOGENERATOR", size: 'large'}} />
+            options={{text: props.bio + "\n#BIOGENERATOR", size: 'large'}} />
         </div>
       </div>
     </React.Fragment>
   )
 }
 
+async function callApiGateway(req: any, res: any) {
+  const { accessToken } = await getAccessToken(req, res)
+  // Use the access token to call API Gateway.
+  const response = await fetch(new URL(' https://5thiyru4j2.execute-api.eu-west-1.amazonaws.com/bio'), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`
+    }
+  })
+  return await response.json()
+}
+
 export const getServerSideProps = withPageAuthRequired({
   async getServerSideProps(ctx): Promise<{ props: Props }> {
     const session = await getSession(ctx.req, ctx.res)
-    console.log('FETCHING FROM S3 ' + session?.user['sub'])
     const response = await fetch(`https://cihan-twitter-bio-generator-backend-bucket.s3.eu-west-1.amazonaws.com/user/${(session?.user['sub'] as string).split('|')[1]}/bio.json`)
-    console.log('FETCHED FROM S3: ' + response.headers.get('Last-Modified'))
+    let bio
     if (response.status !== 200) {
-      return {
-        props: {}
+      bio = await callApiGateway(ctx.req, ctx.res)
+    } else {
+      const lastModified = new Date(response.headers.get('Last-Modified') as string).getTime()
+      if (+new Date() - lastModified > 24 * 3600 * 1000) {
+        bio = await callApiGateway(ctx.req, ctx.res)
+      } else {
+        bio = await response.json()
       }
     }
-    const bio = await response.json()
+
     return {
       props: {
         bio: bio.generated as string,
-        lastModified: new Date(response.headers.get('Last-Modified') as string).getTime(),
       }
     }
   }
